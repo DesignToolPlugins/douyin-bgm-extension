@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "抖音BGM采集器",
+  "version": "1.0.0",
+  "description": "从抖音创作服务平台热门音乐榜一键下载 MP3",
+  "permissions": ["downloads", "storage", "tabs", "notifications"],
+  "host_permissions": [
+    "https://creator.douyin.com/*",
+    "https://www.douyin.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "抖音BGM采集器"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}
