@@ -75,6 +75,8 @@ async function run(timeFilter, topN) {
   // 3. 每首 → 拉 mp3 URL → 下载
   let ok = 0, fail = 0;
   let firstDownloadId = null;
+  const failedItems = []; // 记录失败项
+  
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     const rank = i + 1;
@@ -85,6 +87,8 @@ async function run(timeFilter, topN) {
     try {
       const mp3Url = await getMp3Url(item.item_id);
       if (!mp3Url) {
+        console.error('[BGM] 获取 MP3 URL 失败', { rank, title, item_id: item.item_id });
+        failedItems.push({ rank, title, reason: 'MP3 URL 为空' });
         fail++;
         continue;
       }
@@ -95,9 +99,15 @@ async function run(timeFilter, topN) {
       if (firstDownloadId === null) firstDownloadId = downloadId;
       ok++;
     } catch (e) {
-      console.warn('[BGM] 下载失败', item.title, e);
+      console.error('[BGM] 下载失败', { rank, title, item_id: item.item_id, error: e.message });
+      failedItems.push({ rank, title, reason: e.message });
       fail++;
     }
+  }
+  
+  // 输出失败详情
+  if (failedItems.length > 0) {
+    console.error('[BGM] 失败详情:', failedItems);
   }
 
   // 4. 完事
@@ -125,7 +135,16 @@ async function run(timeFilter, topN) {
 async function getMp3Url(itemId) {
   const r = await fetch(MUSIC_DETAIL_API + itemId, { credentials: 'include' });
   const d = await r.json();
-  return d?.music_info?.play_url?.url_list?.[0] || '';
+  
+  // 调试日志：记录完整响应
+  console.log('[BGM] music detail API 响应:', { itemId, response: d });
+  
+  const mp3Url = d?.music_info?.play_url?.url_list?.[0] || '';
+  if (!mp3Url) {
+    console.error('[BGM] 无法提取 MP3 URL，API 响应结构:', JSON.stringify(d, null, 2));
+  }
+  
+  return mp3Url;
 }
 
 function triggerDownload(url, filename) {
