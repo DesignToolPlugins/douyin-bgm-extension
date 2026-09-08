@@ -133,18 +133,53 @@ async function run(timeFilter, topN) {
 
 // ========== 辅助 ==========
 async function getMp3Url(itemId) {
-  const r = await fetch(MUSIC_DETAIL_API + itemId, { credentials: 'include' });
-  const d = await r.json();
-  
-  // 调试日志：记录完整响应
-  console.log('[BGM] music detail API 响应:', { itemId, response: d });
-  
-  const mp3Url = d?.music_info?.play_url?.url_list?.[0] || '';
-  if (!mp3Url) {
-    console.error('[BGM] 无法提取 MP3 URL，API 响应结构:', JSON.stringify(d, null, 2));
-  }
-  
-  return mp3Url;
+  // 通过 content script 在页面上下文中调用 API，绕过安全限制
+  return new Promise((resolve, reject) => {
+    // 获取当前活动的标签页
+    chrome.tabs.query({ active: true, currentWindow: false }, (tabs) => {
+      // 找到 douyin.com 或 creator.douyin.com 的标签页
+      const douyinTab = tabs.find(tab => 
+        tab.url && (tab.url.includes('douyin.com'))
+      );
+      
+      if (!douyinTab) {
+        // 如果没有打开的抖音页面，尝试直接调用（可能失败）
+        console.warn('[BGM] 未找到抖音页面，尝试直接调用 API');
+        fetch(MUSIC_DETAIL_API + itemId, { credentials: 'include' })
+          .then(r => r.json())
+          .then(d => {
+            const mp3Url = d?.music_info?.play_url?.url_list?.[0] || '';
+            resolve(mp3Url);
+          })
+          .catch(err => {
+            console.error('[BGM] API 调用失败:', err);
+            resolve(''); // 返回空字符串而不是 reject
+          });
+        return;
+      }
+      
+      // 向 content script 发送消息
+      chrome.tabs.sendMessage(
+        douyinTab.id,
+        { action: 'getMp3Url', itemId },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            console.error('[BGM] Content script 通信失败:', chrome.runtime.lastError);
+            resolve(''); // 返回空字符串
+            return;
+          }
+          
+          if (response && response.success) {
+            console.log('[BGM] 通过 content script 获取 MP3 URL 成功:', itemId);
+            resolve(response.url);
+          } else {
+            console.error('[BGM] Content script 返回错误:', response?.error);
+            resolve(''); // 返回空字符串
+          }
+        }
+      );
+    });
+  });
 }
 
 function triggerDownload(url, filename) {
