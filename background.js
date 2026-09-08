@@ -96,12 +96,13 @@ async function run(timeFilter, topN) {
   const stamp = timeStamp();
   const folder = 'douyin-bgm/' + stamp;
 
-  // 3. 每首 → 拉 mp3 URL → 下载
+  // 3. 每首 → 拉 mp3 URL → 下载（并发，限制 5 个）
   let ok = 0, fail = 0;
   let firstDownloadId = null;
   const failedItems = []; // 记录失败项
+  const concurrency = 5; // 并发数限制
   
-  for (let i = 0; i < items.length; i++) {
+  for (let i = 0; i < items.length; i += concurrency) {
     // 检查是否被取消
     if (shouldCancel) {
       console.log('[BGM] 下载已取消');
@@ -112,30 +113,46 @@ async function run(timeFilter, topN) {
       return;
     }
     
-    const item = items[i];
-    const rank = i + 1;
-    const title = (item.title || '').slice(0, 40);
-    report({ type: 'progress', text: `[${rank}/${items.length}] ${title}` });
-    setBadge(rank + '/' + items.length, '#4A90E2');
-
-    try {
-      const mp3Url = await getMp3Url(item.item_id);
-      if (!mp3Url) {
-        console.error('[BGM] 获取 MP3 URL 失败', { rank, title, item_id: item.item_id });
-        failedItems.push({ rank, title, reason: 'MP3 URL 为空' });
-        fail++;
-        continue;
+    // 并发处理一批（最多 concurrency 首）
+    const batch = items.slice(i, i + concurrency);
+    const batchPromises = batch.map(async (item, idx) => {
+      const rank = i + idx + 1;
+      const title = (item.title || '').slice(0, 40);
+      
+      try {
+        report({ type: 'progress', text: `[${rank}/${items.length}] ${title}` });
+        setBadge(rank + '/' + items.length, '#4A90E2');
+        
+        const mp3Url = await getMp3Url(item.item_id);
+        if (!mp3Url) {
+          console.error('[BGM] 获取 MP3 URL 失败', { rank, title, item_id: item.item_id });
+          return { success: false, rank, title, reason: 'MP3 URL 为空' };
+        }
+        
+        const filename = folder + '/' +
+          String(rank).padStart(2, '0') + '_' +
+          sanitize(item.title || item.item_id) + '_' + item.item_id.slice(-6) + '.mp3';
+        const downloadId = await triggerDownload(mp3Url, filename);
+        
+        return { success: true, downloadId };
+      } catch (e) {
+        console.error('[BGM] 下载失败', { rank, title, item_id: item.item_id, error: e.message });
+        return { success: false, rank, title, reason: e.message };
       }
-      const filename = folder + '/' +
-        String(rank).padStart(2, '0') + '_' +
-        sanitize(item.title || item.item_id) + '_' + item.item_id.slice(-6) + '.mp3';
-      const downloadId = await triggerDownload(mp3Url, filename);
-      if (firstDownloadId === null) firstDownloadId = downloadId;
-      ok++;
-    } catch (e) {
-      console.error('[BGM] 下载失败', { rank, title, item_id: item.item_id, error: e.message });
-      failedItems.push({ rank, title, reason: e.message });
-      fail++;
+    });
+    
+    // 等待当前批次完成
+    const results = await Promise.all(batchPromises);
+    
+    // 统计结果
+    for (const result of results) {
+      if (result.success) {
+        if (firstDownloadId === null) firstDownloadId = result.downloadId;
+        ok++;
+      } else {
+        failedItems.push({ rank: result.rank, title: result.title, reason: result.reason });
+        fail++;
+      }
     }
   }
   
