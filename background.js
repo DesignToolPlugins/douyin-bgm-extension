@@ -184,22 +184,29 @@ async function run(timeFilter, topN) {
 
 // ========== 辅助 ==========
 async function getMp3Url(itemId) {
+  console.log('[BGM] 开始获取 MP3 URL，itemId:', itemId);
+  
   // 通过 content script 在页面上下文中调用 API，绕过安全限制
   return new Promise((resolve, reject) => {
     // 获取当前活动的标签页
     chrome.tabs.query({ active: true, currentWindow: false }, (tabs) => {
+      console.log('[BGM] 查询到的标签页数量:', tabs.length);
+      
       // 找到 douyin.com 或 creator.douyin.com 的标签页
       const douyinTab = tabs.find(tab => 
         tab.url && (tab.url.includes('douyin.com'))
       );
       
       if (!douyinTab) {
+        console.error('[BGM] ⚠️ 未找到抖音页面！请确保浏览器中至少有一个 douyin.com 或 creator.douyin.com 的标签页打开');
+        console.log('[BGM] 尝试直接调用 API（可能失败）');
+        
         // 如果没有打开的抖音页面，尝试直接调用（可能失败）
-        console.warn('[BGM] 未找到抖音页面，尝试直接调用 API');
         fetch(MUSIC_DETAIL_API + itemId, { credentials: 'include' })
           .then(r => r.json())
           .then(d => {
             const mp3Url = d?.music_info?.play_url?.url_list?.[0] || '';
+            console.log('[BGM] 直接调用结果:', mp3Url ? '成功' : '失败', d);
             resolve(mp3Url);
           })
           .catch(err => {
@@ -209,22 +216,25 @@ async function getMp3Url(itemId) {
         return;
       }
       
+      console.log('[BGM] 找到抖音页面，tabId:', douyinTab.id, 'url:', douyinTab.url);
+      
       // 向 content script 发送消息
       chrome.tabs.sendMessage(
         douyinTab.id,
         { action: 'getMp3Url', itemId },
         (response) => {
           if (chrome.runtime.lastError) {
-            console.error('[BGM] Content script 通信失败:', chrome.runtime.lastError);
+            console.error('[BGM] ❌ Content script 通信失败:', chrome.runtime.lastError.message);
+            console.log('[BGM] 可能原因：1) content script 未注入 2) 页面刚加载需要刷新');
             resolve(''); // 返回空字符串
             return;
           }
           
           if (response && response.success) {
-            console.log('[BGM] 通过 content script 获取 MP3 URL 成功:', itemId);
+            console.log('[BGM] ✅ 通过 content script 获取 MP3 URL 成功:', itemId.slice(0, 10));
             resolve(response.url);
           } else {
-            console.error('[BGM] Content script 返回错误:', response?.error);
+            console.error('[BGM] ❌ Content script 返回错误:', response?.error);
             resolve(''); // 返回空字符串
           }
         }
