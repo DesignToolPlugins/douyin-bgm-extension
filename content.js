@@ -1,5 +1,9 @@
 // content.js - 在页面上下文中执行，可以访问页面的安全参数
 
+// 标记 content script 已加载
+window.contentScriptInjected = true;
+console.log('[BGM Content] Content script loaded on:', window.location.href);
+
 // 监听来自 service worker 的消息
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'getMp3Url') {
