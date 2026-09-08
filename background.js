@@ -14,13 +14,31 @@ const MUSIC_DETAIL_API = 'https://www.douyin.com/aweme/v1/web/music/detail/?musi
 const LOGIN_URL = 'https://creator.douyin.com/creator-micro/creative-guidance?discover_menu=5';
 
 // ========== 消息入口 ==========
+let isRunning = false; // 全局状态标志，防止重复启动
+let badgeClearTimer = null; // Badge 清除定时器
+let shouldCancel = false; // 取消标志
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'start') {
+    // 防止快速双击启动多次
+    if (isRunning) {
+      console.warn('[BGM] 任务已在运行中，忽略重复请求');
+      return;
+    }
+    
+    isRunning = true;
+    shouldCancel = false; // 重置取消标志
     run(msg.timeFilter, msg.topN).catch(err => {
       console.error('[BGM] 未捕获错误', err);
       report({ type: 'error', text: '出错: ' + (err.message || String(err)) });
       finish();
     });
+  } else if (msg.action === 'cancel') {
+    // 取消下载
+    if (isRunning) {
+      shouldCancel = true;
+      console.log('[BGM] 用户取消下载');
+    }
   }
 });
 
@@ -28,6 +46,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 async function run(timeFilter, topN) {
   await chrome.storage.local.set({ running: true, lastStatus: null, lastDownloadId: null });
   setBadge('...', '#4A90E2');
+  
+  // 清除旧的 badge 定时器
+  if (badgeClearTimer) {
+    clearTimeout(badgeClearTimer);
+    badgeClearTimer = null;
+  }
 
   // 1. 抓榜单
   report({ type: 'progress', text: '正在拉榜单...' });
@@ -78,6 +102,16 @@ async function run(timeFilter, topN) {
   const failedItems = []; // 记录失败项
   
   for (let i = 0; i < items.length; i++) {
+    // 检查是否被取消
+    if (shouldCancel) {
+      console.log('[BGM] 下载已取消');
+      report({ type: 'done', text: `已取消 ℹ️ 成功 ${ok} / 总共 ${items.length}\n目录: Downloads/${folder}`, downloadId: firstDownloadId });
+      setBadge('×', '#909399');
+      badgeClearTimer = setTimeout(() => setBadge('', ''), 30000);
+      finish();
+      return;
+    }
+    
     const item = items[i];
     const rank = i + 1;
     const title = (item.title || '').slice(0, 40);
@@ -94,7 +128,7 @@ async function run(timeFilter, topN) {
       }
       const filename = folder + '/' +
         String(rank).padStart(2, '0') + '_' +
-        sanitize(item.title || item.item_id) + '.mp3';
+        sanitize(item.title || item.item_id) + '_' + item.item_id.slice(-6) + '.mp3';
       const downloadId = await triggerDownload(mp3Url, filename);
       if (firstDownloadId === null) firstDownloadId = downloadId;
       ok++;
@@ -127,7 +161,7 @@ async function run(timeFilter, topN) {
   } catch (e) { /* 通知不是必需，失败忽略 */ }
 
   // 30 秒后清 badge
-  setTimeout(() => setBadge('', ''), 30000);
+  badgeClearTimer = setTimeout(() => setBadge('', ''), 30000);
   finish();
 }
 
@@ -221,6 +255,7 @@ async function report(msg) {
 
 async function finish() {
   await chrome.storage.local.set({ running: false });
+  isRunning = false; // 重置全局状态
 }
 
 function setBadge(text, color) {

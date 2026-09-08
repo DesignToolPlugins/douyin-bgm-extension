@@ -1,5 +1,6 @@
 // popup 弹窗逻辑
 const startBtn = document.getElementById('start');
+const cancelBtn = document.getElementById('cancel');
 const openFolderBtn = document.getElementById('openFolder');
 const statusEl = document.getElementById('status');
 const timeFilterEl = document.getElementById('timeFilter');
@@ -15,6 +16,10 @@ function setStatus(text, type = '') {
 function setRunning(running) {
   startBtn.disabled = running;
   startBtn.textContent = running ? '下载中...' : '开始下载';
+  cancelBtn.disabled = false;
+  if (!running) {
+    cancelBtn.style.display = 'none';
+  }
 }
 
 // 打开弹窗时恢复上一次的选择 + 显示当前状态
@@ -40,6 +45,7 @@ startBtn.addEventListener('click', async () => {
   setRunning(true);
   setStatus('准备中...');
   openFolderBtn.style.display = 'none';
+  cancelBtn.style.display = 'block'; // 显示取消按钮
   chrome.runtime.sendMessage({
     action: 'start',
     timeFilter: parseInt(timeFilter),
@@ -47,9 +53,27 @@ startBtn.addEventListener('click', async () => {
   });
 });
 
-openFolderBtn.addEventListener('click', () => {
+cancelBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ action: 'cancel' });
+  cancelBtn.disabled = true;
+  setStatus('取消中...');
+});
+
+openFolderBtn.addEventListener('click', async () => {
   if (lastDownloadId) {
-    chrome.downloads.show(lastDownloadId);
+    try {
+      // 验证下载项是否仍然存在
+      const items = await chrome.downloads.search({ id: lastDownloadId });
+      if (items && items.length > 0 && items[0].filename) {
+        chrome.downloads.show(lastDownloadId);
+      } else {
+        setStatus('文件已被删除或移动', 'error');
+        openFolderBtn.style.display = 'none';
+      }
+    } catch (e) {
+      setStatus('无法打开文件夹', 'error');
+      openFolderBtn.style.display = 'none';
+    }
   }
 });
 
