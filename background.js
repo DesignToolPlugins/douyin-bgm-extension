@@ -97,7 +97,7 @@ async function run(timeFilter, topN) {
   const folder = 'douyin-bgm/' + stamp;
 
   // 3. 每首 → 拉 mp3 URL → 下载（并发，限制 5 个）
-  let ok = 0, fail = 0;
+  let ok = 0, fail = 0, skipped = 0;
   let firstDownloadId = null;
   const failedItems = []; // 记录失败项
   const concurrency = 5; // 并发数限制
@@ -123,11 +123,27 @@ async function run(timeFilter, topN) {
         report({ type: 'progress', text: `[${rank}/${items.length}] ${title}` });
         setBadge(rank + '/' + items.length, '#4A90E2');
         
-        const mp3Url = await getMp3Url(item.item_id);
-        if (!mp3Url) {
+        const result = await getMp3Url(item.item_id);
+        if (!result || !result.url) {
           console.error('[BGM] 获取 MP3 URL 失败', { rank, title, item_id: item.item_id });
           return { success: false, rank, title, reason: 'MP3 URL 为空' };
         }
+        
+        // 过滤规则1: 时长小于15秒
+        if (result.duration && result.duration < 15) {
+          console.log(`[BGM] 跳过短音频 (${result.duration}秒):`, title);
+          return { success: false, skipped: true, rank, title, reason: `时长仅${result.duration}秒` };
+        }
+        
+        // 过滤规则2: 标题包含台词关键词
+        const voiceKeywords = ['原声', '配音', '旁白', '解说', '朗诵', '有声'];
+        const hasVoice = voiceKeywords.some(kw => (result.title || title).includes(kw));
+        if (hasVoice) {
+          console.log('[BGM] 跳过含台词音频:', title);
+          return { success: false, skipped: true, rank, title, reason: '可能包含台词' };
+        }
+        
+        const mp3Url = result.url;
         
         const filename = folder + '/' +
           String(rank).padStart(2, '0') + '_' +
@@ -149,6 +165,8 @@ async function run(timeFilter, topN) {
       if (result.success) {
         if (firstDownloadId === null) firstDownloadId = result.downloadId;
         ok++;
+      } else if (result.skipped) {
+        skipped++;
       } else {
         failedItems.push({ rank: result.rank, title: result.title, reason: result.reason });
         fail++;
@@ -162,18 +180,24 @@ async function run(timeFilter, topN) {
   }
 
   // 4. 完事
-  const doneText = `完成 ✅ 成功 ${ok} / 失败 ${fail}\n目录: Downloads/${folder}`;
+  let doneText = `完成 ✅ 成功 ${ok} / 失败 ${fail}`;
+  if (skipped > 0) {
+    doneText += ` / 已跳过 ${skipped} 首（短音频/含台词）`;
+  }
+  doneText += `\n目录: Downloads/${folder}`;
   await chrome.storage.local.set({ lastDownloadId: firstDownloadId });
   report({ type: 'done', text: doneText, downloadId: firstDownloadId });
   setBadge('✓', '#67c23a');
 
   // 系统通知（在 Chrome 关闭 popup 也能看到）
   try {
+    let notificationMsg = `${ok} 首下载完成，${fail} 首失败`;
+    if (skipped > 0) notificationMsg += `，${skipped} 首已跳过`;
     chrome.notifications.create({
       type: 'basic',
       iconUrl: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0OCIgZmlsbD0iIzRBOTBFMiIvPjwvc3ZnPg==',
       title: '抖音 BGM 采集',
-      message: `${ok} 首下载完成，${fail} 首失败`
+      message: notificationMsg
     });
   } catch (e) { /* 通知不是必需，失败忽略 */ }
 
@@ -205,13 +229,18 @@ async function getMp3Url(itemId) {
         fetch(MUSIC_DETAIL_API + itemId, { credentials: 'include' })
           .then(r => r.json())
           .then(d => {
-            const mp3Url = d?.music_info?.play_url?.url_list?.[0] || '';
+            const musicInfo = d?.music_info || d?.music || {};
+            const mp3Url = musicInfo?.play_url?.url_list?.[0] || '';
             console.log('[BGM] 直接调用结果:', mp3Url ? '成功' : '失败', d);
-            resolve(mp3Url);
+            resolve(mp3Url ? {
+              url: mp3Url,
+              duration: musicInfo.duration || 0,
+              title: musicInfo.title || ''
+            } : null);
           })
           .catch(err => {
             console.error('[BGM] API 调用失败:', err);
-            resolve(''); // 返回空字符串而不是 reject
+            resolve(null); // 返回 null
           });
         return;
       }
@@ -226,16 +255,16 @@ async function getMp3Url(itemId) {
           if (chrome.runtime.lastError) {
             console.error('[BGM] ❌ Content script 通信失败:', chrome.runtime.lastError.message);
             console.log('[BGM] 可能原因：1) content script 未注入 2) 页面刚加载需要刷新');
-            resolve(''); // 返回空字符串
+            resolve(null); // 返回 null
             return;
           }
           
           if (response && response.success) {
             console.log('[BGM] ✅ 通过 content script 获取 MP3 URL 成功:', itemId.slice(0, 10));
-            resolve(response.url);
+            resolve({ url: response.url, duration: response.duration, title: response.title });
           } else {
             console.error('[BGM] ❌ Content script 返回错误:', response?.error);
-            resolve(''); // 返回空字符串
+            resolve(null); // 返回 null
           }
         }
       );

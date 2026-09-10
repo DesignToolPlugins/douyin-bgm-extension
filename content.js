@@ -9,7 +9,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'getMp3Url') {
     // 在页面上下文中调用 API
     getMp3UrlInPage(msg.itemId)
-      .then(url => sendResponse({ success: true, url }))
+      .then(result => sendResponse({ success: true, ...result }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true; // 异步响应
   }
@@ -31,19 +31,24 @@ async function getMp3UrlInPage(itemId) {
     }
     
     const data = await response.json();
+    const musicInfo = data?.music_info || data?.music || {};
     
     // 尝试多种可能的数据路径
     const mp3Url = 
-      data?.music_info?.play_url?.url_list?.[0] ||
-      data?.music_info?.play_url?.uri ||
-      data?.music?.play_url?.url_list?.[0] ||
+      musicInfo?.play_url?.url_list?.[0] ||
+      musicInfo?.play_url?.uri ||
       '';
     
     if (!mp3Url) {
       console.error('[BGM Content] 无法提取 MP3 URL，响应数据:', data);
     }
     
-    return mp3Url;
+    // 返回 URL、时长、标题
+    return {
+      url: mp3Url,
+      duration: musicInfo.duration || 0,
+      title: musicInfo.title || ''
+    };
   } catch (error) {
     console.error('[BGM Content] 获取 MP3 URL 失败:', error);
     throw error;
